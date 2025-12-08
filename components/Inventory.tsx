@@ -1,16 +1,25 @@
 import React, { useState, useRef } from 'react';
 import { Product } from '../types';
-import { Plus, Sparkles, Trash2, Upload, FileSpreadsheet, Search, ShoppingBag } from 'lucide-react';
+import { Plus, Sparkles, Trash2, Upload, FileSpreadsheet, Search, ShoppingBag, Loader2, Check, X, AlertTriangle } from 'lucide-react';
 import { parseProductDescription } from '../services/geminiService';
-import { addProduct, deleteProduct, updateProduct } from '../services/firestore';
+import { addProduct, deleteProduct, updateProduct, batchProcessProducts } from '../services/firestore';
 
 interface InventoryProps {
   products: Product[];
 }
 
+interface ImportPreview {
+  toAdd: Product[];
+  toUpdate: Product[];
+  errors: number;
+  totalLines: number;
+}
+
 const Inventory: React.FC<InventoryProps> = ({ products }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null);
   const [aiInput, setAiInput] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [searchTerm, setSearchTerm] = useState('');
@@ -92,7 +101,7 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
     }
   };
 
-  // CSV Parsing Logic with UPSERT (Update or Insert)
+  // CSV Parsing Logic - STEP 1: Parse and Preview
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -102,75 +111,140 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
       const text = event.target?.result as string;
       if (!text) return;
 
-      const lines = text.split('\n');
-      let addedCount = 0;
-      let updatedCount = 0;
+      try {
+        // Robust splitting for different OS line endings
+        const lines = text.split(/\r\n|\n|\r/);
+        let errorCount = 0;
 
-      // Clone existing products to modify
-      const currentProductsMap = new Map<string, Product>();
-      products.forEach(p => currentProductsMap.set(p.sku, p));
+        const toAdd: Product[] = [];
+        const toUpdate: Product[] = [];
 
-      // Skip header (Row 0)
-      for (let i = 1; i < lines.length; i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
+        // Clone existing products to modify
+        const currentProductsMap = new Map<string, Product>();
+        products.forEach(p => currentProductsMap.set(p.sku, p));
 
-        // Regex to split by comma but ignore commas inside quotes
-        const columns = line.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/);
+        // Detect delimiter
+        const header = lines[0] || '';
+        const delimiter = header.includes(';') ? ';' : ',';
 
-        if (columns.length < 5) continue;
+        // Skip header (Row 0)
+        for (let i = 1; i < lines.length; i++) {
+          const line = lines[i].trim();
+          if (!line) continue;
 
-        const parseCurrency = (str: string) => {
-          if (!str) return 0;
-          const clean = str.replace(/["R$\s]/g, '').replace(/\./g, '').replace(',', '.');
-          const num = parseFloat(clean);
-          return isNaN(num) ? 0 : num;
-        };
+          try {
+            // Regex to split by delimiter but ignore delimiters inside quotes
+            const regex = delimiter === ';'
+              ? /;(?=(?:(?:[^"]*"){2})*[^"]*$)/
+              : /,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
 
-        const status = columns[4]?.replace(/"/g, '').trim().toUpperCase();
-        const stock = status === 'EM ESTOQUE' ? 1 : 0;
-        const sku = columns[2]?.replace(/"/g, '');
+            const columns = line.split(regex);
 
-        if (!sku) continue;
+            if (columns.length < 3) {
+              if (line.replace(/,/g, '').trim().length > 0) {
+                errorCount++;
+              }
+              continue;
+            }
 
-        const csvProdData = {
-          sku: sku,
-          name: columns[3]?.replace(/"/g, '') || 'Sem Nome',
-          category: columns[14]?.replace(/"/g, '') || columns[1]?.replace(/"/g, '') || 'Geral',
-          size: columns[12]?.replace(/"/g, '') || '',
-          color: columns[13]?.replace(/"/g, '') || '',
-          price: parseCurrency(columns[8]),
-          cost: parseCurrency(columns[7]),
-          stock: stock
-        };
+            const parseCurrency = (str: string) => {
+              if (!str) return 0;
+              const clean = str.replace(/["R$\s]/g, '').replace(/\./g, '').replace(',', '.');
+              const num = parseFloat(clean);
+              return isNaN(num) ? 0 : num;
+            };
 
-        if (currentProductsMap.has(sku)) {
-          // Update existing
-          const existing = currentProductsMap.get(sku)!;
-          const updated = {
-            ...existing,
-            ...csvProdData,
-            id: existing.id // Keep original ID to preserve sales history
-          };
-          await updateProduct(updated);
-          updatedCount++;
-        } else {
-          // Create new
-          const newProd = {
-            ...csvProdData,
-            id: crypto.randomUUID()
-          };
-          await addProduct(newProd);
-          addedCount++;
+            const cleanStr = (str: string) => str ? str.replace(/"/g, '').trim() : '';
+
+            const sku = cleanStr(columns[2]);
+            if (!sku) {
+              errorCount++;
+              continue;
+            }
+
+            const name = cleanStr(columns[3]) || 'Sem Nome';
+            const status = cleanStr(columns[4]).toUpperCase();
+
+            let stock = parseInt(cleanStr(columns[10]));
+            if (isNaN(stock)) {
+              stock = status === 'EM ESTOQUE' ? 1 : 0;
+            }
+
+            const csvProdData = {
+              sku: sku,
+              name: name,
+              category: cleanStr(columns[14]) || cleanStr(columns[1]) || 'Geral',
+              size: cleanStr(columns[12]),
+              color: cleanStr(columns[13]),
+              price: parseCurrency(columns[8]),
+              cost: parseCurrency(columns[7]),
+              stock: stock
+            };
+
+            if (currentProductsMap.has(sku)) {
+              const existing = currentProductsMap.get(sku)!;
+              const hasChanged =
+                existing.name !== csvProdData.name ||
+                existing.category !== csvProdData.category ||
+                existing.size !== csvProdData.size ||
+                existing.color !== csvProdData.color ||
+                existing.price !== csvProdData.price ||
+                existing.cost !== csvProdData.cost ||
+                existing.stock !== csvProdData.stock;
+
+              if (hasChanged) {
+                toUpdate.push({
+                  ...existing,
+                  ...csvProdData,
+                  id: existing.id
+                });
+              }
+            } else {
+              const newProd = {
+                ...csvProdData,
+                id: crypto.randomUUID()
+              };
+              toAdd.push(newProd);
+              currentProductsMap.set(sku, newProd);
+            }
+          } catch (err) {
+            console.error(`Erro na linha ${i + 1}:`, err);
+            errorCount++;
+          }
         }
+
+        setImportPreview({
+          toAdd,
+          toUpdate,
+          errors: errorCount,
+          totalLines: lines.length
+        });
+
+      } catch (error) {
+        console.error("Erro fatal na importação:", error);
+        alert(`Erro ao ler arquivo: ${error}`);
+      } finally {
+        if (fileInputRef.current) fileInputRef.current.value = '';
       }
-
-      alert(`Importação concluída!\n\nNovos produtos: ${addedCount}\nProdutos atualizados: ${updatedCount}`);
-
-      // Reset input
-      if (fileInputRef.current) fileInputRef.current.value = '';
     };
     reader.readAsText(file);
+  };
+
+  // STEP 2: Confirm and Save
+  const confirmImport = async () => {
+    if (!importPreview) return;
+
+    setIsImporting(true);
+    try {
+      await batchProcessProducts(importPreview.toAdd, importPreview.toUpdate);
+      alert("Importação concluída com sucesso!");
+      setImportPreview(null);
+    } catch (error) {
+      console.error(error);
+      alert("Erro ao salvar no banco de dados.");
+    } finally {
+      setIsImporting(false);
+    }
   };
 
   const filteredProducts = products.filter(p =>
@@ -181,6 +255,110 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
 
   return (
     <div className="space-y-6">
+      {/* Import Preview Modal */}
+      {importPreview && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-2xl w-full max-h-[80vh] flex flex-col overflow-hidden">
+            <div className="p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <h3 className="text-xl font-bold text-slate-800 flex items-center gap-2">
+                <FileSpreadsheet className="text-emerald-600" />
+                Pré-visualização da Importação
+              </h3>
+              <button onClick={() => setImportPreview(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={24} />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-6">
+              <div className="grid grid-cols-3 gap-4">
+                <div className="bg-emerald-50 p-4 rounded-lg border border-emerald-100 text-center">
+                  <div className="text-2xl font-bold text-emerald-600">{importPreview.toAdd.length}</div>
+                  <div className="text-xs text-emerald-800 font-medium uppercase">Novos Produtos</div>
+                </div>
+                <div className="bg-blue-50 p-4 rounded-lg border border-blue-100 text-center">
+                  <div className="text-2xl font-bold text-blue-600">{importPreview.toUpdate.length}</div>
+                  <div className="text-xs text-blue-800 font-medium uppercase">Atualizações</div>
+                </div>
+                <div className="bg-red-50 p-4 rounded-lg border border-red-100 text-center">
+                  <div className="text-2xl font-bold text-red-600">{importPreview.errors}</div>
+                  <div className="text-xs text-red-800 font-medium uppercase">Erros / Ignorados</div>
+                </div>
+              </div>
+
+              <div>
+                <h4 className="font-semibold text-slate-700 mb-2">Amostra dos dados detectados:</h4>
+                <div className="bg-slate-50 rounded-lg border border-slate-200 overflow-hidden">
+                  <table className="w-full text-xs text-left">
+                    <thead className="bg-slate-100 text-slate-500 font-semibold">
+                      <tr>
+                        <th className="p-2">SKU</th>
+                        <th className="p-2">Nome</th>
+                        <th className="p-2">Preço</th>
+                        <th className="p-2">Estoque</th>
+                        <th className="p-2">Ação</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-200">
+                      {[...importPreview.toAdd, ...importPreview.toUpdate].slice(0, 5).map((p, i) => (
+                        <tr key={i}>
+                          <td className="p-2 font-mono">{p.sku}</td>
+                          <td className="p-2 truncate max-w-[150px]">{p.name}</td>
+                          <td className="p-2">R$ {p.price}</td>
+                          <td className="p-2">{p.stock}</td>
+                          <td className="p-2">
+                            {importPreview.toAdd.includes(p) ? (
+                              <span className="text-emerald-600 font-bold">NOVO</span>
+                            ) : (
+                              <span className="text-blue-600 font-bold">ATUALIZAR</span>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  <div className="p-2 text-center text-xs text-slate-400 bg-slate-50 border-t border-slate-200">
+                    ... e mais {Math.max(0, (importPreview.toAdd.length + importPreview.toUpdate.length) - 5)} itens
+                  </div>
+                </div>
+              </div>
+
+              {importPreview.errors > 0 && (
+                <div className="flex items-start gap-2 text-amber-600 text-sm bg-amber-50 p-3 rounded-lg border border-amber-100">
+                  <AlertTriangle className="shrink-0 mt-0.5" size={16} />
+                  <p>Algumas linhas foram ignoradas por estarem vazias ou mal formatadas. Isso é comum em arquivos CSV.</p>
+                </div>
+              )}
+            </div>
+
+            <div className="p-6 border-t border-slate-100 bg-slate-50 flex justify-end gap-3">
+              <button
+                onClick={() => setImportPreview(null)}
+                className="px-4 py-2 text-slate-600 hover:bg-slate-200 rounded-lg font-medium"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={confirmImport}
+                disabled={isImporting}
+                className="px-6 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg font-medium shadow-md flex items-center gap-2 disabled:opacity-50"
+              >
+                {isImporting ? <Loader2 className="animate-spin" size={18} /> : <Check size={18} />}
+                Confirmar e Salvar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isImporting && !importPreview && (
+        <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
+          <div className="bg-white p-6 rounded-xl shadow-xl flex flex-col items-center gap-4">
+            <Loader2 className="animate-spin text-rose-500" size={32} />
+            <p className="font-medium text-slate-700">Salvando no banco de dados...</p>
+          </div>
+        </div>
+      )}
+
       <div className="flex flex-col md:flex-row justify-between items-center gap-4">
         <h2 className="text-2xl font-bold text-slate-800">Estoque</h2>
 
@@ -197,7 +375,8 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
           </div>
           <button
             onClick={() => fileInputRef.current?.click()}
-            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm"
+            disabled={isImporting}
+            className="bg-emerald-600 hover:bg-emerald-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors text-sm disabled:opacity-50"
             title="Importar CSV (Atualiza SKUs existentes)"
           >
             <FileSpreadsheet size={20} />

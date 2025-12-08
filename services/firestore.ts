@@ -7,7 +7,8 @@ import {
     setDoc,
     getDocs,
     query,
-    orderBy
+    orderBy,
+    writeBatch
 } from "firebase/firestore";
 import { db } from "./firebase";
 import { Product, Customer, Sale } from "../types";
@@ -36,6 +37,31 @@ export const deleteProduct = async (id: string) => {
 export const bulkAddProducts = async (products: Product[]) => {
     const batchPromises = products.map(p => setDoc(doc(db, "products", p.id), p));
     await Promise.all(batchPromises);
+};
+
+export const batchProcessProducts = async (toAdd: Product[], toUpdate: Product[]) => {
+    // Firestore batch limit is 500 operations
+    const allOps = [
+        ...toAdd.map(p => ({ type: 'add', data: p })),
+        ...toUpdate.map(p => ({ type: 'update', data: p }))
+    ];
+
+    const chunkSize = 450; // Safe margin below 500
+    for (let i = 0; i < allOps.length; i += chunkSize) {
+        const chunk = allOps.slice(i, i + chunkSize);
+        const batch = writeBatch(db);
+
+        chunk.forEach(op => {
+            const ref = doc(db, "products", op.data.id);
+            if (op.type === 'add') {
+                batch.set(ref, op.data);
+            } else {
+                batch.set(ref, op.data, { merge: true });
+            }
+        });
+
+        await batch.commit();
+    }
 };
 
 // --- Customers ---

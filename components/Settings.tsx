@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Customer, Product, Sale } from '../types';
 import { Download, Upload, Trash2, Save, Settings as SettingsIcon, AlertTriangle, Loader2 } from 'lucide-react';
 import { addProduct, addCustomer, addSale, deleteProduct, deleteCustomer, deleteSale } from '../services/firestore';
+import Diagnostics from './Diagnostics';
 
 interface SettingsProps {
   sales: Sale[];
@@ -196,6 +197,10 @@ const Settings: React.FC<SettingsProps> = ({ sales, products, customers }) => {
               </ul>
             </div>
           </div>
+        </div>
+
+        <div className="md:col-span-2">
+          <Diagnostics />
         </div>
       </div>
     </div>
