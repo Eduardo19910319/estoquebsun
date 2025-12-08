@@ -6,45 +6,47 @@ import Customers from './components/Customers';
 import Sales from './components/Sales';
 import Dashboard from './components/Dashboard';
 import Settings from './components/Settings';
+import { collection, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { db } from './services/firebase';
 
 const App: React.FC = () => {
   const [currentView, setCurrentView] = useState<ViewState>(ViewState.DASHBOARD);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
-  // Local Storage State with Migration Logic
-  const [products, setProducts] = useState<Product[]>(() => {
-    const saved = localStorage.getItem('products');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Firestore State
+  const [products, setProducts] = useState<Product[]>([]);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [sales, setSales] = useState<Sale[]>([]);
 
-  const [customers, setCustomers] = useState<Customer[]>(() => {
-    const saved = localStorage.getItem('customers');
-    return saved ? JSON.parse(saved) : [];
-  });
+  // Data Synchronization
+  useEffect(() => {
+    // Products Listener
+    const qProducts = query(collection(db, "products"), orderBy("name"));
+    const unsubProducts = onSnapshot(qProducts, (snapshot) => {
+      const data = snapshot.docs.map(doc => doc.data() as Product);
+      setProducts(data);
+    });
 
-  const [sales, setSales] = useState<Sale[]>(() => {
-    const saved = localStorage.getItem('sales');
-    if (!saved) return [];
-    
-    const parsedSales: Sale[] = JSON.parse(saved);
-    
-    // MIGRATION: Ensure all installments have amountPaid
-    return parsedSales.map(sale => ({
-      ...sale,
-      installments: sale.installments.map(inst => ({
-        ...inst,
-        // If amountPaid exists, use it. If not, infer from 'paid' boolean.
-        amountPaid: inst.amountPaid !== undefined 
-          ? inst.amountPaid 
-          : (inst.paid ? inst.value : 0)
-      }))
-    }));
-  });
+    // Customers Listener
+    const qCustomers = query(collection(db, "customers"), orderBy("name"));
+    const unsubCustomers = onSnapshot(qCustomers, (snapshot) => {
+      const data = snapshot.docs.map(doc => doc.data() as Customer);
+      setCustomers(data);
+    });
 
-  // Persistence Effects
-  useEffect(() => localStorage.setItem('products', JSON.stringify(products)), [products]);
-  useEffect(() => localStorage.setItem('customers', JSON.stringify(customers)), [customers]);
-  useEffect(() => localStorage.setItem('sales', JSON.stringify(sales)), [sales]);
+    // Sales Listener
+    const qSales = query(collection(db, "sales"), orderBy("date", "desc"));
+    const unsubSales = onSnapshot(qSales, (snapshot) => {
+      const data = snapshot.docs.map(doc => doc.data() as Sale);
+      setSales(data);
+    });
+
+    return () => {
+      unsubProducts();
+      unsubCustomers();
+      unsubSales();
+    };
+  }, []);
 
   const navItems = [
     { id: ViewState.DASHBOARD, label: 'Painel', icon: LayoutDashboard },
@@ -68,11 +70,10 @@ const App: React.FC = () => {
             <button
               key={item.id}
               onClick={() => setCurrentView(item.id)}
-              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${
-                currentView === item.id || (item.id === ViewState.SALES && currentView === ViewState.NEW_SALE)
-                  ? 'bg-rose-50 text-rose-600 font-semibold shadow-sm' 
+              className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all ${currentView === item.id || (item.id === ViewState.SALES && currentView === ViewState.NEW_SALE)
+                  ? 'bg-rose-50 text-rose-600 font-semibold shadow-sm'
                   : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
-              }`}
+                }`}
             >
               <item.icon size={20} />
               {item.label}
@@ -80,7 +81,7 @@ const App: React.FC = () => {
           ))}
         </nav>
         <div className="p-4 border-t border-slate-100 text-xs text-slate-400 text-center">
-            &copy; 2024 ModaGestão AI
+          &copy; 2024 ModaGestão AI
         </div>
       </aside>
 
@@ -111,28 +112,23 @@ const App: React.FC = () => {
       {/* Main Content */}
       <main className="flex-1 md:ml-64 p-6 pt-24 md:pt-6 max-w-7xl mx-auto w-full">
         {currentView === ViewState.DASHBOARD && <Dashboard sales={sales} products={products} customers={customers} changeView={setCurrentView} />}
-        {currentView === ViewState.INVENTORY && <Inventory products={products} setProducts={setProducts} />}
-        {currentView === ViewState.CUSTOMERS && <Customers customers={customers} setCustomers={setCustomers} />}
+        {currentView === ViewState.INVENTORY && <Inventory products={products} />}
+        {currentView === ViewState.CUSTOMERS && <Customers customers={customers} />}
         {(currentView === ViewState.SALES || currentView === ViewState.NEW_SALE) && (
-          <Sales 
-            sales={sales} 
-            setSales={setSales} 
-            products={products} 
-            setProducts={setProducts} 
-            customers={customers} 
+          <Sales
+            sales={sales}
+            products={products}
+            customers={customers}
             currentView={currentView}
             changeView={setCurrentView}
           />
         )}
         {currentView === ViewState.SETTINGS && (
-            <Settings 
-                sales={sales} 
-                products={products} 
-                customers={customers} 
-                setSales={setSales} 
-                setProducts={setProducts} 
-                setCustomers={setCustomers} 
-            />
+          <Settings
+            sales={sales}
+            products={products}
+            customers={customers}
+          />
         )}
       </main>
     </div>

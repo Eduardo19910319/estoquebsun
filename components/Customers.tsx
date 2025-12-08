@@ -1,26 +1,26 @@
 import React, { useState } from 'react';
 import { Customer } from '../types';
 import { UserPlus, Phone, Mail, User, Trash2 } from 'lucide-react';
+import { addCustomer, deleteCustomer } from '../services/firestore';
 
 interface CustomersProps {
   customers: Customer[];
-  setCustomers: React.Dispatch<React.SetStateAction<Customer[]>>;
 }
 
-const Customers: React.FC<CustomersProps> = ({ customers, setCustomers }) => {
+const Customers: React.FC<CustomersProps> = ({ customers }) => {
   const [isAdding, setIsAdding] = useState(false);
   const [newCustomer, setNewCustomer] = useState({ name: '', phone: '', email: '' });
 
-  const handleAdd = (e: React.FormEvent) => {
+  const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
-    setCustomers([...customers, { ...newCustomer, id: crypto.randomUUID() }]);
+    await addCustomer({ ...newCustomer, id: crypto.randomUUID() });
     setIsAdding(false);
     setNewCustomer({ name: '', phone: '', email: '' });
   };
 
-  const deleteCustomer = (id: string) => {
+  const handleDeleteCustomer = async (id: string) => {
     if (window.confirm("Excluir cliente?")) {
-      setCustomers(customers.filter(c => c.id !== id));
+      await deleteCustomer(id);
     }
   };
 
@@ -28,7 +28,7 @@ const Customers: React.FC<CustomersProps> = ({ customers, setCustomers }) => {
     <div className="space-y-6">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold text-slate-800">Clientes</h2>
-        <button 
+        <button
           onClick={() => setIsAdding(!isAdding)}
           className="bg-rose-500 hover:bg-rose-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors"
         >
@@ -42,15 +42,15 @@ const Customers: React.FC<CustomersProps> = ({ customers, setCustomers }) => {
           <form onSubmit={handleAdd} className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-xs font-medium text-slate-500 uppercase">Nome</label>
-              <input required value={newCustomer.name} onChange={e => setNewCustomer({...newCustomer, name: e.target.value})} className="w-full border p-2 rounded-lg" />
+              <input required value={newCustomer.name} onChange={e => setNewCustomer({ ...newCustomer, name: e.target.value })} className="w-full border p-2 rounded-lg" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 uppercase">Telefone / WhatsApp</label>
-              <input required value={newCustomer.phone} onChange={e => setNewCustomer({...newCustomer, phone: e.target.value})} className="w-full border p-2 rounded-lg" />
+              <input required value={newCustomer.phone} onChange={e => setNewCustomer({ ...newCustomer, phone: e.target.value })} className="w-full border p-2 rounded-lg" />
             </div>
             <div>
               <label className="block text-xs font-medium text-slate-500 uppercase">Email (Opcional)</label>
-              <input type="email" value={newCustomer.email} onChange={e => setNewCustomer({...newCustomer, email: e.target.value})} className="w-full border p-2 rounded-lg" />
+              <input type="email" value={newCustomer.email} onChange={e => setNewCustomer({ ...newCustomer, email: e.target.value })} className="w-full border p-2 rounded-lg" />
             </div>
             <div className="md:col-span-3 flex justify-end gap-2 mt-2">
               <button type="button" onClick={() => setIsAdding(false)} className="px-4 py-2 text-slate-600 hover:bg-slate-100 rounded-lg">Cancelar</button>
@@ -63,7 +63,7 @@ const Customers: React.FC<CustomersProps> = ({ customers, setCustomers }) => {
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
         {customers.map(customer => (
           <div key={customer.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-100 hover:border-rose-200 transition-all group relative">
-            <button onClick={() => deleteCustomer(customer.id)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
+            <button onClick={() => handleDeleteCustomer(customer.id)} className="absolute top-4 right-4 text-slate-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity">
               <Trash2 size={16} />
             </button>
             <div className="flex items-center gap-3 mb-3">

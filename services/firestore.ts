@@ -1,0 +1,65 @@
+import {
+    collection,
+    addDoc,
+    updateDoc,
+    deleteDoc,
+    doc,
+    setDoc,
+    getDocs,
+    query,
+    orderBy
+} from "firebase/firestore";
+import { db } from "./firebase";
+import { Product, Customer, Sale } from "../types";
+
+// Collection References
+const productsRef = collection(db, "products");
+const customersRef = collection(db, "customers");
+const salesRef = collection(db, "sales");
+
+// --- Products ---
+export const addProduct = async (product: Product) => {
+    // We use setDoc with product.id to keep the ID consistent if it's already generated
+    // Or we can let Firestore generate it. The current app generates UUIDs.
+    // Let's use the existing ID as the document ID for simplicity.
+    await setDoc(doc(db, "products", product.id), product);
+};
+
+export const updateProduct = async (product: Product) => {
+    await setDoc(doc(db, "products", product.id), product, { merge: true });
+};
+
+export const deleteProduct = async (id: string) => {
+    await deleteDoc(doc(db, "products", id));
+};
+
+export const bulkAddProducts = async (products: Product[]) => {
+    const batchPromises = products.map(p => setDoc(doc(db, "products", p.id), p));
+    await Promise.all(batchPromises);
+};
+
+// --- Customers ---
+export const addCustomer = async (customer: Customer) => {
+    await setDoc(doc(db, "customers", customer.id), customer);
+};
+
+export const updateCustomer = async (customer: Customer) => {
+    await setDoc(doc(db, "customers", customer.id), customer, { merge: true });
+};
+
+export const deleteCustomer = async (id: string) => {
+    await deleteDoc(doc(db, "customers", id));
+};
+
+// --- Sales ---
+export const addSale = async (sale: Sale) => {
+    await setDoc(doc(db, "sales", sale.id), sale);
+};
+
+export const updateSale = async (sale: Sale) => {
+    await setDoc(doc(db, "sales", sale.id), sale, { merge: true });
+};
+
+export const deleteSale = async (id: string) => {
+    await deleteDoc(doc(db, "sales", id));
+};
