@@ -231,12 +231,20 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
   };
 
   // STEP 2: Confirm and Save
+  const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+
   const confirmImport = async () => {
     if (!importPreview) return;
 
     setIsImporting(true);
+    setImportProgress({ current: 0, total: importPreview.toAdd.length + importPreview.toUpdate.length });
+
     try {
-      await batchProcessProducts(importPreview.toAdd, importPreview.toUpdate);
+      await batchProcessProducts(
+        importPreview.toAdd,
+        importPreview.toUpdate,
+        (current, total) => setImportProgress({ current, total })
+      );
       alert("Importação concluída com sucesso!");
       setImportPreview(null);
     } catch (error) {
@@ -244,6 +252,7 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
       alert("Erro ao salvar no banco de dados.");
     } finally {
       setIsImporting(false);
+      setImportProgress({ current: 0, total: 0 });
     }
   };
 
@@ -352,9 +361,20 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
 
       {isImporting && !importPreview && (
         <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
-          <div className="bg-white p-6 rounded-xl shadow-xl flex flex-col items-center gap-4">
+          <div className="bg-white p-6 rounded-xl shadow-xl flex flex-col items-center gap-4 w-64">
             <Loader2 className="animate-spin text-rose-500" size={32} />
-            <p className="font-medium text-slate-700">Salvando no banco de dados...</p>
+            <div className="text-center">
+              <p className="font-medium text-slate-700 mb-1">Salvando...</p>
+              <p className="text-xs text-slate-500">
+                {importProgress.current} de {importProgress.total} processados
+              </p>
+            </div>
+            <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-rose-500 h-full transition-all duration-300"
+                style={{ width: `${(importProgress.current / Math.max(importProgress.total, 1)) * 100}%` }}
+              />
+            </div>
           </div>
         </div>
       )}

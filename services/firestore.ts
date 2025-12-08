@@ -39,14 +39,20 @@ export const bulkAddProducts = async (products: Product[]) => {
     await Promise.all(batchPromises);
 };
 
-export const batchProcessProducts = async (toAdd: Product[], toUpdate: Product[]) => {
+export const batchProcessProducts = async (
+    toAdd: Product[],
+    toUpdate: Product[],
+    onProgress?: (current: number, total: number) => void
+) => {
     // Firestore batch limit is 500 operations
     const allOps = [
         ...toAdd.map(p => ({ type: 'add', data: p })),
         ...toUpdate.map(p => ({ type: 'update', data: p }))
     ];
 
-    const chunkSize = 450; // Safe margin below 500
+    const chunkSize = 50; // Reduced to 50 to prevent timeouts and show progress
+    let processedCount = 0;
+
     for (let i = 0; i < allOps.length; i += chunkSize) {
         const chunk = allOps.slice(i, i + chunkSize);
         const batch = writeBatch(db);
@@ -61,6 +67,11 @@ export const batchProcessProducts = async (toAdd: Product[], toUpdate: Product[]
         });
 
         await batch.commit();
+        processedCount += chunk.length;
+
+        if (onProgress) {
+            onProgress(processedCount, allOps.length);
+        }
     }
 };
 
