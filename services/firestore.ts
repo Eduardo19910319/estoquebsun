@@ -39,39 +39,63 @@ export const bulkAddProducts = async (products: Product[]) => {
     await Promise.all(batchPromises);
 };
 
+const sanitizeData = (data: any) => {
+    const sanitized: any = {};
+    Object.keys(data).forEach(key => {
+        if (data[key] !== undefined) {
+            sanitized[key] = data[key];
+        }
+    });
+    return sanitized;
+};
+
 export const batchProcessProducts = async (
     toAdd: Product[],
     toUpdate: Product[],
     onProgress?: (current: number, total: number) => void
 ) => {
-    // Firestore batch limit is 500 operations
     const allOps = [
         ...toAdd.map(p => ({ type: 'add', data: p })),
         ...toUpdate.map(p => ({ type: 'update', data: p }))
     ];
 
-    const chunkSize = 50; // Reduced to 50 to prevent timeouts and show progress
+    // Use small concurrency to ensure stability and progress feedback
+    const CONCURRENCY = 5;
     let processedCount = 0;
+    let errorCount = 0;
 
-    for (let i = 0; i < allOps.length; i += chunkSize) {
-        const chunk = allOps.slice(i, i + chunkSize);
-        const batch = writeBatch(db);
+    console.log(`Iniciando processamento sequencial. Total: ${allOps.length}`);
 
-        chunk.forEach(op => {
-            const ref = doc(db, "products", op.data.id);
-            if (op.type === 'add') {
-                batch.set(ref, op.data);
-            } else {
-                batch.set(ref, op.data, { merge: true });
+    for (let i = 0; i < allOps.length; i += CONCURRENCY) {
+        const chunk = allOps.slice(i, i + CONCURRENCY);
+
+        const promises = chunk.map(async (op) => {
+            try {
+                const ref = doc(db, "products", op.data.id);
+                const cleanData = sanitizeData(op.data);
+
+                if (op.type === 'add') {
+                    await setDoc(ref, cleanData);
+                } else {
+                    await setDoc(ref, cleanData, { merge: true });
+                }
+            } catch (err) {
+                console.error(`Erro ao salvar item ${op.data.sku}:`, err);
+                errorCount++;
+                // We don't throw here so other items can continue
             }
         });
 
-        await batch.commit();
-        processedCount += chunk.length;
+        await Promise.all(promises);
 
+        processedCount += chunk.length;
         if (onProgress) {
-            onProgress(processedCount, allOps.length);
+            onProgress(Math.min(processedCount, allOps.length), allOps.length);
         }
+    }
+
+    if (errorCount > 0) {
+        console.warn(`Processamento concluído com ${errorCount} erros.`);
     }
 };
 
