@@ -47,64 +47,62 @@ const sanitizeData = (data: any) => {
     return sanitized;
 };
 
+// Adicione essa função auxiliar antes da batchProcessProducts, ou logo após os imports
+const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise<T> => {
+    return Promise.race([
+        promise,
+        new Promise<T>((_, reject) =>
+            setTimeout(() => reject(new Error(`Timeout: ${label} demorou mais de ${ms}ms`)), ms)
+        )
+    ]);
+};
+
+// Substitua a função batchProcessProducts inteira por esta versão blindada:
 export const batchProcessProducts = async (
     toAdd: Product[],
     toUpdate: Product[],
-    onProgress?: (current: number, total: number) => void,
-    onError?: (error: string) => void
+    onProgress?: (current: number, total: number) => void
 ) => {
+    // Mesclamos tudo para processar
     const allOps = [
         ...toAdd.map(p => ({ type: 'add', data: p })),
         ...toUpdate.map(p => ({ type: 'update', data: p }))
     ];
 
-    // Use small concurrency to ensure stability and progress feedback
-    const CONCURRENCY = 5;
-    const TIMEOUT_MS = 5000; // 5 seconds timeout per doc
+    const CONCURRENCY = 5; // Mantemos baixo para não saturar
     let processedCount = 0;
     let errorCount = 0;
 
-    console.log(`Iniciando processamento sequencial. Total: ${allOps.length}`);
+    console.log(`🚀 Shinso Log: Iniciando processamento de ${allOps.length} itens...`);
 
     for (let i = 0; i < allOps.length; i += CONCURRENCY) {
         const chunk = allOps.slice(i, i + CONCURRENCY);
-        console.log(`Processando chunk ${Math.floor(i / CONCURRENCY) + 1}...`);
 
+        // Mapeamos o chunk para Promises que NUNCA rejeitam (elas retornam o erro para contarmos)
         const promises = chunk.map(async (op) => {
+            const itemId = op.data.sku || op.data.id;
             try {
-                if (!op.data.id) {
-                    throw new Error(`Produto sem ID: ${op.data.sku}`);
-                }
-
                 const ref = doc(db, "products", op.data.id);
-                // Ensure data is clean (no undefined)
                 const cleanData = sanitizeData(op.data);
 
-                // Create a promise for the Firestore op
-                const firestoreOp = op.type === 'add'
-                    ? setDoc(ref, cleanData)
-                    : setDoc(ref, cleanData, { merge: true });
-
-                // Create a timeout promise
-                const timeoutOp = new Promise((_, reject) =>
-                    setTimeout(() => reject(new Error("Timeout saving document")), TIMEOUT_MS)
+                // Timeout de 5s para cada operação individual
+                await withTimeout(
+                    op.type === 'add'
+                        ? setDoc(ref, cleanData)
+                        : setDoc(ref, cleanData, { merge: true }),
+                    5000,
+                    `Item ${itemId}`
                 );
 
-                // Race them
-                await Promise.race([firestoreOp, timeoutOp]);
-
+                return { success: true };
             } catch (err: any) {
-                console.error(`Erro ao salvar item ${op.data.sku}:`, err);
+                console.error(`❌ Erro no item ${itemId}:`, err.message);
                 errorCount++;
-                // Check if likely a permissions issue
-                if (err.code === 'permission-denied') {
-                    console.error("CRITICAL: Permission denied. Check Firestore Rules!");
-                }
-                if (onError) onError(`Erro no SKU ${op.data.sku}: ${err.message}`);
+                return { success: false, error: err };
             }
         });
 
-        // Ensure all promises in chunk resolve (caught inside map)
+        // Agora o Promise.all espera todos, mesmo os que deram erro
         await Promise.all(promises);
 
         processedCount += chunk.length;
@@ -114,7 +112,10 @@ export const batchProcessProducts = async (
     }
 
     if (errorCount > 0) {
-        console.warn(`Processamento concluído com ${errorCount} erros.`);
+        console.warn(`⚠️ Processamento finalizado com ${errorCount} erros.`);
+        alert(`Processo finalizado, mas ${errorCount} itens falharam. Verifique o console.`);
+    } else {
+        console.log("✨ Tudo limpo! Importação 100% sucesso.");
     }
 };
 

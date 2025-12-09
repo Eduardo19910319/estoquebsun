@@ -129,38 +129,51 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
 
         // Skip header (Row 0)
         for (let i = 1; i < lines.length; i++) {
-          const line = lines[i].trim();
-          if (!line) continue;
-
+          // SHINSO MOD: Try/Catch BLINDADO para cada linha individual
           try {
-            // Regex to split by delimiter but ignore delimiters inside quotes
+            const line = lines[i].trim();
+            if (!line) continue;
+
+            // Regex mantido, mas agora seguro dentro do try/catch
             const regex = delimiter === ';'
               ? /;(?=(?:(?:[^"]*"){2})*[^"]*$)/
               : /,(?=(?:(?:[^"]*"){2})*[^"]*$)/;
 
             const columns = line.split(regex);
 
+            // Validação básica de colunas
             if (columns.length < 3) {
-              if (line.replace(/,/g, '').trim().length > 0) {
+              // Só conta como erro se tiver conteúdo (não for linha em branco fantasma)
+              if (line.replace(/[;,]/g, '').trim().length > 0) {
+                console.warn(`⚠️ Linha ${i + 1} ignorada: Colunas insuficientes.`, line);
                 errorCount++;
               }
               continue;
             }
 
-            const parseCurrency = (str: string) => {
-              if (!str) return 0;
-              const clean = str.replace(/["R$\s]/g, '').replace(/\./g, '').replace(',', '.');
-              const num = parseFloat(clean);
-              return isNaN(num) ? 0 : num;
-            };
-
             const cleanStr = (str: string) => str ? str.replace(/"/g, '').trim() : '';
 
-            const sku = cleanStr(columns[2]);
-            if (!sku) {
+            // Tratamento de SKU mais robusto
+            // ATENÇÃO: Verifique se o índice [2] bate com sua coluna de SKU no CSV
+            const rawSku = cleanStr(columns[2]);
+            if (!rawSku) {
+              console.warn(`⚠️ Linha ${i + 1} ignorada: SKU vazio.`);
               errorCount++;
               continue;
             }
+
+            // Parsing seguro de números
+            const parseCurrency = (str: string) => {
+              if (!str) return 0;
+              try {
+                // Remove R$, aspas, espaços e converte , para .
+                const clean = str.replace(/["R$\s]/g, '').replace(/\./g, '').replace(',', '.');
+                const num = parseFloat(clean);
+                return isNaN(num) ? 0 : num;
+              } catch {
+                return 0;
+              }
+            };
 
             const name = cleanStr(columns[3]) || 'Sem Nome';
             const status = cleanStr(columns[4]).toUpperCase();
@@ -171,7 +184,7 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
             }
 
             const csvProdData = {
-              sku: sku,
+              sku: rawSku,
               name: name,
               category: cleanStr(columns[14]) || cleanStr(columns[1]) || 'Geral',
               size: cleanStr(columns[12]),
@@ -181,8 +194,9 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
               stock: stock
             };
 
-            if (currentProductsMap.has(sku)) {
-              const existing = currentProductsMap.get(sku)!;
+            if (currentProductsMap.has(rawSku)) {
+              const existing = currentProductsMap.get(rawSku)!;
+              // Verifica se houve mudança real
               const hasChanged =
                 existing.name !== csvProdData.name ||
                 existing.category !== csvProdData.category ||
@@ -205,12 +219,13 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
                 id: crypto.randomUUID()
               };
               toAdd.push(newProd);
-              currentProductsMap.set(sku, newProd);
+              currentProductsMap.set(rawSku, newProd);
             }
-          } catch (err) {
-            console.error(`Erro na linha ${i + 1}:`, err);
-            console.error(`Conteúdo da linha falha: "${line}"`);
+
+          } catch (lineError) {
+            console.error(`💥 Erro fatal na linha ${i + 1}:`, lineError);
             errorCount++;
+            // O continue é implícito aqui, vai para a próxima iteração
           }
         }
 
@@ -250,11 +265,7 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
       await batchProcessProducts(
         dataToImport.toAdd,
         dataToImport.toUpdate,
-        (current, total) => setImportProgress({ current, total }),
-        (errorMessage) => {
-          console.error(errorMessage);
-          // Optional: Accumulate errors to show at the end
-        }
+        (current, total) => setImportProgress({ current, total })
       );
       console.log("Importação concluída com sucesso!");
       // Small delay to let user see 100%
