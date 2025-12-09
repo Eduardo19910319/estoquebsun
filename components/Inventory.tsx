@@ -209,6 +209,7 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
             }
           } catch (err) {
             console.error(`Erro na linha ${i + 1}:`, err);
+            console.error(`Conteúdo da linha falha: "${line}"`);
             errorCount++;
           }
         }
@@ -232,27 +233,37 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
 
   // STEP 2: Confirm and Save
   const [importProgress, setImportProgress] = useState({ current: 0, total: 0 });
+  const [importError, setImportError] = useState<string | null>(null);
 
   const confirmImport = async () => {
-    if (!importPreview) return;
+    // Capture data before clearing state
+    const dataToImport = importPreview;
+    if (!dataToImport) return;
 
+    // Switch to Loading UI immediately
+    setImportPreview(null);
     setIsImporting(true);
-    setImportProgress({ current: 0, total: importPreview.toAdd.length + importPreview.toUpdate.length });
+    setImportError(null);
+    setImportProgress({ current: 0, total: dataToImport.toAdd.length + dataToImport.toUpdate.length });
 
     try {
       await batchProcessProducts(
-        importPreview.toAdd,
-        importPreview.toUpdate,
-        (current, total) => setImportProgress({ current, total })
+        dataToImport.toAdd,
+        dataToImport.toUpdate,
+        (current, total) => setImportProgress({ current, total }),
+        (errorMessage) => {
+          console.error(errorMessage);
+          // Optional: Accumulate errors to show at the end
+        }
       );
-      alert("Importação concluída com sucesso!");
-      setImportPreview(null);
-    } catch (error) {
-      console.error(error);
-      alert("Erro ao salvar no banco de dados.");
-    } finally {
+      console.log("Importação concluída com sucesso!");
+      // Small delay to let user see 100%
+      await new Promise(resolve => setTimeout(resolve, 500));
       setIsImporting(false);
-      setImportProgress({ current: 0, total: 0 });
+    } catch (error: any) {
+      console.error(error);
+      setImportError(`Erro fatal: ${error.message || error}`);
+      // Don't close modal on fatal error, let user see it
     }
   };
 
@@ -362,19 +373,37 @@ const Inventory: React.FC<InventoryProps> = ({ products }) => {
       {isImporting && !importPreview && (
         <div className="fixed inset-0 bg-black/20 flex items-center justify-center z-50">
           <div className="bg-white p-6 rounded-xl shadow-xl flex flex-col items-center gap-4 w-64">
-            <Loader2 className="animate-spin text-rose-500" size={32} />
-            <div className="text-center">
-              <p className="font-medium text-slate-700 mb-1">Salvando...</p>
-              <p className="text-xs text-slate-500">
-                {importProgress.current} de {importProgress.total} processados
-              </p>
-            </div>
-            <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
-              <div
-                className="bg-rose-500 h-full transition-all duration-300"
-                style={{ width: `${(importProgress.current / Math.max(importProgress.total, 1)) * 100}%` }}
-              />
-            </div>
+            {importError ? (
+              <>
+                <AlertTriangle className="text-red-500" size={32} />
+                <div className="text-center">
+                  <p className="font-medium text-red-600 mb-1">Erro!</p>
+                  <p className="text-xs text-slate-500 break-words">{importError}</p>
+                </div>
+                <button
+                  onClick={() => setIsImporting(false)}
+                  className="mt-2 px-4 py-2 bg-slate-100 hover:bg-slate-200 rounded text-sm font-medium"
+                >
+                  Fechar
+                </button>
+              </>
+            ) : (
+              <>
+                <Loader2 className="animate-spin text-rose-500" size={32} />
+                <div className="text-center">
+                  <p className="font-medium text-slate-700 mb-1">Salvando...</p>
+                  <p className="text-xs text-slate-500">
+                    {importProgress.current} de {importProgress.total} processados
+                  </p>
+                </div>
+                <div className="w-full bg-slate-100 rounded-full h-2 overflow-hidden">
+                  <div
+                    className="bg-rose-500 h-full transition-all duration-300"
+                    style={{ width: `${(importProgress.current / Math.max(importProgress.total, 1)) * 100}%` }}
+                  />
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}
